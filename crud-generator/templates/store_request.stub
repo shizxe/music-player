@@ -1,0 +1,24 @@
+<?php
+declare(strict_types=1);
+
+namespace App\Http\Requests\{{ module }};
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class Store{{ model }}Request extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+{% if store_rules %}
+        return [
+{% for rule in store_rules %}            '{{ rule.field }}' => '{{ rule.rule }}',
+{% endfor %}        ];
+{% else %}
+        return [];
+{% endif %}    }
+}

@@ -1,0 +1,20 @@
+<?php
+declare(strict_types=1);
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class {{ model }} extends Model
+{
+    use HasFactory;
+
+    protected $table = '{{ table }}';
+
+    protected $fillable = [
+{% if fields %}
+{% for field in fields %}        '{{ field }}',
+{% endfor %}{% else %}        //
+{% endif %}    ];
+}

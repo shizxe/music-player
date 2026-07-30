@@ -1,0 +1,25 @@
+<?php
+declare(strict_types=1);
+
+namespace App\Providers;
+
+use Illuminate\Support\ServiceProvider;
+
+class RepositoryServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+{% for binding in bindings %}
+        $this->app->bind(
+            {{ binding.interface }}::class,
+            {{ binding.implementation }}::class
+        );
+
+{% endfor %}
+    }
+
+    public function boot(): void
+    {
+        //
+    }
+}

@@ -1,0 +1,36 @@
+use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+
+class UserSeeder extends Seeder
+{
+    public function run()
+    {
+        $users = $this->getCsvData();
+
+        foreach ($users as $rowData) {
+            DB::table('users')->insert([
+                'name'     => $rowData['name'],
+                'email'    => $rowData['email'],
+                'password' => Hash::make($rowData['password']),
+            ]);
+        }
+    }
+
+    private function getCsvData(): array
+    {
+        $path = database_path('seeders/data/users.csv');
+        $data = array_map('str_getcsv', file($path));
+
+        $headers = array_map('trim', $data[0]);
+        unset($data[0]);
+
+        $result = [];
+
+        foreach ($data as $row) {
+            $result[] = array_combine($headers, $row);
+        }
+
+        return $result;
+    }
+}

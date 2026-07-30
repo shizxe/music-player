@@ -1,0 +1,24 @@
+<?php
+declare(strict_types=1);
+
+namespace App\Http\Requests\{{ module }};
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class Update{{ model }}Request extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+{% if update_rules %}
+        return [
+{% for rule in update_rules %}            '{{ rule.field }}' => '{{ rule.rule }}',
+{% endfor %}        ];
+{% else %}
+        return [];
+{% endif %}    }
+}
