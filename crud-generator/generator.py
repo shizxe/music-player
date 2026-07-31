@@ -416,11 +416,6 @@ def build_column_mappings(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     declaration += f", {args[0]}"
             declaration += ")"
 
-        if field.get("comment"):
-            declaration += f"->comment('{field['comment']}')"
-        if field.get("reference_table"):
-            declaration += "->constrained()"
-
         columns.append({
             "name": name,
             "declaration": declaration,
