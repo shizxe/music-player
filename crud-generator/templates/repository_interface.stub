@@ -5,9 +5,7 @@ namespace App\Repositories\{{ module }};
 
 interface {{ model }}RepositoryInterface
 {
-    public function getAll(): array;
-
-    public function findById(int $id): array;
+    public function get(array $data = []): array;
 
     public function create(array $data): array;
 

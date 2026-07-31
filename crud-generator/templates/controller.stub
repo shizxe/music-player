@@ -6,37 +6,42 @@ namespace App\Http\Controllers\{{ module }};
 use App\Http\Controllers\Controller;
 use App\Http\Requests\{{ module }}\Store{{ model }}Request;
 use App\Http\Requests\{{ module }}\Update{{ model }}Request;
+use App\Http\Resources\{{ module }}\{{ model }}Resource;
 use App\Services\{{ module }}\{{ model }}ServiceInterface;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class {{ model }}Controller extends Controller
 {
     public function __construct(private {{ model }}ServiceInterface $service) {}
 
-    public function index(): JsonResponse
+    public function get(Request $request): JsonResponse
     {
-        return response()->json($this->service->getAll());
+        $records = $this->service->get($request->all());
+
+        return response()->json({{ model }}Resource::collection($records));
     }
 
-    public function show(int $id): JsonResponse
+    public function create(Store{{ model }}Request $request): JsonResponse
     {
-        return response()->json($this->service->getById($id));
-    }
+        $record = $this->service->create($request->all());
 
-    public function store(Store{{ model }}Request $request): JsonResponse
-    {
-        return response()->json($this->service->create($request->validated()), 201);
+        return response()->json(new {{ model }}Resource($record), 201);
     }
 
     public function update(Update{{ model }}Request $request, int $id): JsonResponse
     {
-        return response()->json($this->service->update($id, $request->validated()));
+        $record = $this->service->update($id, $request->all());
+
+        return response()->json(new {{ model }}Resource($record));
     }
 
-    public function destroy(int $id): JsonResponse
+    public function delete(Request $request): JsonResponse
     {
+        $id = (int) $request->input('id');
+
         $this->service->delete($id);
 
-        return response()->json(null, 204);
+        return response()->json(['id' => $id]);
     }
 }

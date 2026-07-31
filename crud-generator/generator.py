@@ -526,6 +526,13 @@ def generate_repository(module: ModuleDefinition, force: bool) -> bool:
     return write_file(path, content, force=force)
 
 
+def generate_resource(module: ModuleDefinition, force: bool) -> bool:
+    path = APP_DIR / "Http" / "Resources" / module.module / f"{module.model}Resource.php"
+    ensure_directory(path.parent)
+    content = render_template("resource.stub", compute_stub_context(module))
+    return write_file(path, content, force=force)
+
+
 def find_existing_migration(table_name: str) -> Path | None:
     pattern = f"_create_{table_name}_table.php"
     for path in MIGRATIONS_DIR.glob(f"*{pattern}"):
@@ -667,6 +674,7 @@ def generate_module(module: ModuleDefinition, force: bool) -> dict[str, bool]:
     results["Service"] = generate_service(module, force)
     results["Repository Interface"] = generate_repository_interface(module, force)
     results["Repository"] = generate_repository(module, force)
+    results["Resource"] = generate_resource(module, force)
     results["Migration"] = generate_migration(module, force)
     return results
 

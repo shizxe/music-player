@@ -9,14 +9,9 @@ class {{ model }}Service implements {{ model }}ServiceInterface
 {
     public function __construct(private {{ model }}RepositoryInterface $repository) {}
 
-    public function getAll(): array
+    public function get(array $data = []): array
     {
-        return $this->repository->getAll();
-    }
-
-    public function getById(int $id): array
-    {
-        return $this->repository->findById($id);
+        return $this->repository->get($data);
     }
 
     public function create(array $data): array
