@@ -21,8 +21,9 @@ def snake_case(value: str) -> str:
         return ""
 
     value = re.sub(r"[^A-Za-z0-9]+", "_", value)
-    value = SNAKE_PATTERN.sub("_", value).lower()
-    value = re.sub(r"__+", "_", value).strip("_")
+    value = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
+    value = re.sub(r"(?<=[A-Za-z])(?=[A-Z][a-z])", "_", value)
+    value = re.sub(r"_+", "_", value).strip("_").lower()
     return value
 
 
@@ -38,6 +39,20 @@ def pluralize(value: str) -> str:
 def class_name(value: str) -> str:
     value = re.sub(r"[^A-Za-z0-9]+", " ", value).strip()
     return "".join(word.capitalize() for word in value.split())
+
+
+def singular_table_name(value: str) -> str:
+    if not value:
+        return value
+    if value.endswith("ies"):
+        return value[:-3] + "y"
+    if value.endswith("sses"):
+        return value[:-2]
+    if value.endswith("ses"):
+        return value[:-2]
+    if value.endswith("s") and len(value) > 1:
+        return value[:-1]
+    return value
 
 
 def table_name_for_model(model_name: str, explicit_table: str | None = None) -> str:

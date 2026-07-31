@@ -13,18 +13,20 @@ return new class extends Migration
             $table->id();
 {% for column in columns %}
             {{ column.declaration }}{% if column.nullable %}->nullable(){% endif %}{% if column.unique %}->unique(){% endif %};
-{% endfor %}{% if foreign_keys %}
+{% endfor %}
+            $table->timestamps();
+{% if unique_indexes %}
+{% for index in unique_indexes %}
+            $table->unique([{% for column in index.columns %}'{{ column }}'{% if not loop.last %}, {% endif %}{% endfor %}], '{{ index.name }}');
+{% endfor %}
+{% endif %}{% if foreign_keys %}
 {% for foreign in foreign_keys %}
             $table
                 ->foreign('{{ foreign.column }}')
                 ->references('{{ foreign.references }}')
                 ->on('{{ foreign.table }}')
                 ->onDelete('{{ foreign.on_delete }}');
-{% endfor %}{% endif %}{% if unique_indexes %}
-{% for index in unique_indexes -%}
-            $table->unique([{%- for column in index.columns %}'{{ column }}'{% if not loop.last %}, {% endif %}{% endfor %}], '{{ index.name }}');
 {% endfor %}{% endif %}
-            $table->timestamps();
 {% if soft_delete %}
             $table->softDeletes();
 {% endif %}

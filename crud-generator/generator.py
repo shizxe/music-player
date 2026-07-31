@@ -1,5 +1,6 @@
 import argparse
 import csv
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,10 @@ from utils import (
     normalize_model_name,
     normalize_table_name,
     parse_fields,
+    pluralize,
     route_name_for_table,
+    singular_table_name,
+    snake_case,
     unique_migration_filename,
     validation_rule,
 )
@@ -46,7 +50,7 @@ def error(message: str) -> None:
     sys.exit(1)
 
 
-def load_csv(path: Path) -> list[dict[str, Any]]:
+def load_csv(path: Path) -> list[list[str]]:
     raw = path.read_bytes()
     for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
         try:
@@ -66,76 +70,258 @@ def load_csv(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def load_xlsx(path: Path) -> list[dict[str, Any]]:
+def load_xlsx(path: Path) -> list[tuple[str, list[list[str]]]]:
     workbook = load_workbook(path, read_only=True, data_only=True)
-    sheet = workbook.active
-    rows = []
-    for row in sheet.iter_rows(values_only=True):
-        values = [str(value).strip() if value is not None else "" for value in row]
-        if any(values):
-            rows.append(values)
-    return rows
+    workbook_rows: list[tuple[str, list[list[str]]]] = []
+    for sheet in workbook.worksheets:
+        rows = []
+        for row in sheet.iter_rows(values_only=True):
+            values = [str(value).strip() if value is not None else "" for value in row]
+            if any(values):
+                rows.append(values)
+        if rows:
+            workbook_rows.append((sheet.title, rows))
+    return workbook_rows
+
+
+def normalize_sql_type(raw_type: str) -> tuple[str, str]:
+    value = raw_type.strip().lower()
+    value = re.sub(r"\s+", " ", value)
+
+    if value.startswith("varchar") or value.startswith("string"):
+        return "string", "string"
+    if value.startswith("char"):
+        return "string", "string"
+    if value.startswith("decimal") or value.startswith("numeric"):
+        return "decimal", "decimal"
+    if value.startswith("tinyint") or value.startswith("bool"):
+        return "boolean", "boolean"
+    if value.startswith("int") or value.startswith("integer"):
+        return "integer", "integer"
+    if value.startswith("bigint"):
+        return "bigint", "bigInteger"
+    if value.startswith("datetime") or value.startswith("timestamp"):
+        return "datetime", "dateTime"
+    if value.startswith("date"):
+        return "date", "date"
+    if value.startswith("time"):
+        return "time", "time"
+    if value.startswith("text"):
+        return "text", "text"
+    if value.startswith("json"):
+        return "json", "json"
+    if value.startswith("uuid"):
+        return "uuid", "uuid"
+    return "string", "string"
+
+
+def load_input_sources(path: Path) -> list[tuple[str, list[list[str]]]]:
+    if path.is_dir():
+        sources: list[tuple[str, list[list[str]]]] = []
+        files = sorted(
+            file for file in path.rglob("*")
+            if file.is_file() and file.suffix.lower() in {".xlsx", ".csv"}
+        )
+        if not files:
+            error(f"Input directory does not contain any .xlsx or .csv files: {path}")
+        for file in files:
+            sources.extend(load_input_sources(file))
+        return sources
+
+    if path.suffix.lower() == ".xlsx":
+        return load_xlsx(path)
+
+    if path.suffix.lower() == ".csv":
+        return [(path.name, load_csv(path))]
+
+    error("Input file must be .xlsx or .csv")
+    return []
 
 
 def normalize_headers(headers: list[str]) -> list[str]:
     return [header.strip().lower() if header else "" for header in headers]
 
 
+def normalized_header_key(value: str | None) -> str:
+    if not value:
+        return ""
+    value = value.strip().lower()
+    value = value.replace(".", "")
+    value = value.replace("-", "_")
+    value = value.replace(" ", "_")
+    value = re.sub(r"_+", "_", value)
+    return value
+
+
 def find_column_index(headers: list[str], name: str) -> int | None:
-    name = name.lower()
+    name = normalized_header_key(name)
     for index, header in enumerate(headers):
-        if header == name:
+        if normalized_header_key(header) == name:
             return index
     return None
 
 
-def parse_definitions(path: Path) -> list[ModuleDefinition]:
-    if path.suffix.lower() == ".xlsx":
-        rows = load_xlsx(path)
-    elif path.suffix.lower() == ".csv":
-        rows = load_csv(path)
-    else:
-        error("Input file must be .xlsx or .csv")
+def is_structured_definition(headers: list[str]) -> bool:
+    normalized = [normalized_header_key(header) for header in headers]
+    return (
+        "論理名" in headers or "logical_name" in normalized or "logicalname" in normalized
+    ) and (
+        "物理名" in headers or "physical_name" in normalized or "physicalname" in normalized
+    ) and (
+        "型" in headers or "type" in normalized or "datatype" in normalized
+    )
 
-    if not rows:
+
+def parse_structured_field_row(row: list[str], indexes: dict[str, int]) -> dict[str, Any] | None:
+    physical_name = row[indexes["physical_name"]] if indexes.get("physical_name") is not None and indexes["physical_name"] < len(row) else ""
+    if not physical_name:
+        return None
+
+    name = snake_case(physical_name)
+    if name == "id":
+        return None
+
+    raw_type = row[indexes["type"]] if indexes.get("type") is not None and indexes["type"] < len(row) else "string"
+    raw_type = raw_type.strip()
+    if not raw_type:
+        raw_type = "string"
+
+    length_value = row[indexes["length"]] if indexes.get("length") is not None and indexes["length"] < len(row) else ""
+    precision_value = row[indexes["precision"]] if indexes.get("precision") is not None and indexes["precision"] < len(row) else ""
+    raw_type_key, field_type = normalize_sql_type(raw_type)
+    if length_value and precision_value:
+        raw_type = f"{raw_type_key}({length_value},{precision_value})"
+    elif length_value:
+        raw_type = f"{raw_type_key}({length_value})"
+    elif raw_type_key == "bigint" and "unsigned" in raw_type.lower():
+        raw_type = "unsignedBigInteger"
+    elif raw_type_key == "integer" and "unsigned" in raw_type.lower():
+        raw_type = "unsignedInteger"
+
+    required_value = row[indexes["required"]] if indexes.get("required") is not None and indexes["required"] < len(row) else ""
+    required = not (required_value.strip().lower() in {"n", "no", "false", "0", "nullable", "null"})
+
+    logical_name = row[indexes["logical_name"]] if indexes.get("logical_name") is not None and indexes["logical_name"] < len(row) else ""
+    comment_text = logical_name.strip() if logical_name else ""
+
+    modifiers: list[str] = []
+    if not required:
+        modifiers.append("nullable")
+
+    constraint_value = ""
+    if indexes.get("constraints") is not None and indexes["constraints"] < len(row):
+        constraint_value = str(row[indexes["constraints"]]).strip().lower()
+        if constraint_value in {"uk", "unique", "unique key"}:
+            modifiers.append("unique")
+        elif constraint_value in {"pk", "primary"}:
+            modifiers.append("primary")
+
+    if indexes.get("primary_key") is not None and indexes["primary_key"] < len(row):
+        primary_key = str(row[indexes["primary_key"]]).strip().lower()
+        if primary_key in {"y", "yes", "true", "1", "pk", "p"}:
+            modifiers.append("primary")
+
+    reference_table = None
+    on_delete = None
+    if "fk" in constraint_value:
+        if name.endswith("_id"):
+            reference_table = pluralize(singular_table_name(name[:-3]))
+    if indexes.get("delete_constraints") is not None and indexes["delete_constraints"] < len(row):
+        on_delete = str(row[indexes["delete_constraints"]]).strip().lower() or None
+
+    return {
+        "name": name,
+        "type": field_type,
+        "raw_type": raw_type,
+        "nullable": not required,
+        "modifiers": modifiers,
+        "comment": comment_text,
+        "reference_table": reference_table,
+        "on_delete": on_delete,
+        "constraint": constraint_value,
+    }
+
+
+def parse_definitions(path: Path) -> list[ModuleDefinition]:
+    sources = load_input_sources(path)
+    if not sources:
         error("Input file does not contain any rows")
 
-    headers = normalize_headers(rows[0])
-    rows = rows[1:]
-    model_index = find_column_index(headers, "model")
-    table_index = find_column_index(headers, "table")
-    fields_index = find_column_index(headers, "fields")
-
-    if model_index is None:
-        error("Input file must include a Model column")
-
     definitions: list[ModuleDefinition] = []
-    for row in rows:
-        model_value = row[model_index] if model_index < len(row) else ""
-        if not model_value:
+    for source_name, sheet_rows in sources:
+        if not sheet_rows:
             continue
 
-        model_name = normalize_model_name(model_value)
-        table_value = row[table_index] if table_index is not None and table_index < len(row) else None
-        fields_value = row[fields_index] if fields_index is not None and fields_index < len(row) else None
-        if isinstance(table_value, str):
-            table_value = table_value.strip()
-            if table_value == "":
-                table_value = None
-        if isinstance(fields_value, str):
-            fields_value = fields_value.strip()
+        headers = normalize_headers(sheet_rows[0])
+        body_rows = sheet_rows[1:]
+        model_index = find_column_index(headers, "model")
+        table_index = find_column_index(headers, "table")
+        fields_index = find_column_index(headers, "fields")
 
-        table_name = normalize_table_name(table_value, model_name)
-        field_definitions = parse_fields(fields_value)
-        definitions.append(
-            ModuleDefinition(
-                model=model_name,
-                table=table_name,
-                module=model_name,
-                fields=field_definitions,
-                route=route_name_for_table(table_name),
-            )
-        )
+        if model_index is not None and table_index is not None and fields_index is not None:
+            for row in body_rows:
+                model_value = row[model_index] if model_index < len(row) else ""
+                if not model_value:
+                    continue
+
+                model_name = normalize_model_name(model_value)
+                table_value = row[table_index] if table_index < len(row) else None
+                fields_value = row[fields_index] if fields_index < len(row) else None
+                if isinstance(table_value, str):
+                    table_value = table_value.strip()
+                    if table_value == "":
+                        table_value = None
+                if isinstance(fields_value, str):
+                    fields_value = fields_value.strip()
+
+                table_name = normalize_table_name(table_value, model_name)
+                field_definitions = parse_fields(fields_value)
+                definitions.append(
+                    ModuleDefinition(
+                        model=model_name,
+                        table=table_name,
+                        module=model_name,
+                        fields=field_definitions,
+                        route=route_name_for_table(table_name),
+                    )
+                )
+            continue
+
+        if is_structured_definition(headers):
+            header_map = {
+                "logical_name": find_column_index(headers, "論理名") or find_column_index(headers, "logical_name") or find_column_index(headers, "logical name"),
+                "physical_name": find_column_index(headers, "物理名") or find_column_index(headers, "physical_name") or find_column_index(headers, "physical name"),
+                "type": find_column_index(headers, "型") or find_column_index(headers, "type") or find_column_index(headers, "datatype"),
+                "length": find_column_index(headers, "長さ") or find_column_index(headers, "length") or find_column_index(headers, "size"),
+                "precision": find_column_index(headers, "精度") or find_column_index(headers, "precision") or find_column_index(headers, "scale"),
+                "required": find_column_index(headers, "必須") or find_column_index(headers, "required") or find_column_index(headers, "nullable"),
+                "primary_key": find_column_index(headers, "主キー") or find_column_index(headers, "primary_key") or find_column_index(headers, "pk"),
+                "constraints": find_column_index(headers, "制約") or find_column_index(headers, "constraints") or find_column_index(headers, "constraint"),
+                "delete_constraints": find_column_index(headers, "削除制約") or find_column_index(headers, "delete_constraints") or find_column_index(headers, "delete constraint"),
+            }
+            table_name = normalize_table_name(source_name, source_name)
+            model_name = normalize_model_name(source_name)
+            field_definitions = []
+            for row in body_rows:
+                field = parse_structured_field_row(row, header_map)
+                if field is None:
+                    continue
+                field_definitions.append(field)
+
+            if field_definitions:
+                definitions.append(
+                    ModuleDefinition(
+                        model=model_name,
+                        table=table_name,
+                        module=model_name,
+                        fields=field_definitions,
+                        route=route_name_for_table(table_name),
+                    )
+                )
+            continue
+
+    if not definitions:
+        error(f"No module definitions found in {path}")
 
     return definitions
 
@@ -163,10 +349,17 @@ def build_column_mappings(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for field in fields:
         raw_type = field["raw_type"].lower()
         name = field["name"]
-        method = raw_type
-        args = []
-        if raw_type.startswith("string(") or raw_type.startswith("decimal("):
-            method = raw_type
+        method = "string"
+        args: list[str] = []
+
+        if field.get("reference_table"):
+            method = "foreignId"
+        elif raw_type.startswith("unsignedbiginteger"):
+            method = "unsignedBigInteger"
+        elif raw_type.startswith("unsignedinteger"):
+            method = "unsignedInteger"
+        elif raw_type.startswith("bigint"):
+            method = "bigInteger"
         elif raw_type == "email":
             method = "string"
         elif raw_type == "password":
@@ -175,8 +368,6 @@ def build_column_mappings(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
             method = "boolean"
         elif raw_type in {"int", "integer"}:
             method = "integer"
-        elif raw_type == "bigint":
-            method = "bigInteger"
         elif raw_type == "datetime":
             method = "dateTime"
         elif raw_type == "json":
@@ -189,16 +380,52 @@ def build_column_mappings(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
             method = "date"
         elif raw_type == "time":
             method = "time"
-        else:
+        elif raw_type.startswith("string("):
             method = "string"
+            length_match = re.search(r"string\((\d+)", raw_type)
+            if length_match:
+                args = [length_match.group(1)]
+        elif raw_type.startswith("char("):
+            method = "char"
+            length_match = re.search(r"char\((\d+)", raw_type)
+            if length_match:
+                args = [length_match.group(1)]
+        elif raw_type.startswith("varchar("):
+            method = "string"
+            length_match = re.search(r"varchar\((\d+)", raw_type)
+            if length_match:
+                args = [length_match.group(1)]
+        elif raw_type.startswith("decimal("):
+            method = "decimal"
+            param_match = re.search(r"decimal\((\d+),(\d+)", raw_type)
+            if param_match:
+                args = [param_match.group(1), param_match.group(2)]
+            else:
+                length_match = re.search(r"decimal\((\d+)", raw_type)
+                if length_match:
+                    args = [length_match.group(1)]
 
-        declaration = f"$table->{method}('{name}')"
-        if field.get("nullable"):
-            declaration += "->nullable()"
+        declaration = f"$table->{method}('{name}'"
+        if method == "foreignId":
+            declaration = f"$table->{method}('{name}')"
+        else:
+            if args:
+                if method == "decimal":
+                    declaration += f", {args[0]}, {args[1]}" if len(args) > 1 else f", {args[0]}"
+                else:
+                    declaration += f", {args[0]}"
+            declaration += ")"
+
+        if field.get("comment"):
+            declaration += f"->comment('{field['comment']}')"
+        if field.get("reference_table"):
+            declaration += "->constrained()"
 
         columns.append({
             "name": name,
             "declaration": declaration,
+            "nullable": field.get("nullable", False),
+            "unique": "unique" in field.get("modifiers", []),
         })
     return columns
 
@@ -215,16 +442,36 @@ def build_rules(fields: list[dict[str, Any]], update: bool = False) -> list[dict
 
 def compute_stub_context(module: ModuleDefinition) -> dict[str, Any]:
     rows = [field["name"] for field in module.fields]
+    columns = build_column_mappings(module.fields)
+    foreign_keys = []
+    unique_indexes = []
+    composite_unique_fields = [field["name"] for field in module.fields if "unique" in field.get("modifiers", []) and field.get("name")]
+    for field in module.fields:
+        if field.get("reference_table"):
+            foreign_keys.append({
+                "column": field["name"],
+                "references": "id",
+                "table": field["reference_table"],
+                "on_delete": field.get("on_delete") or "cascade",
+            })
+
+    if len(composite_unique_fields) >= 2:
+        unique_indexes = [{"columns": composite_unique_fields, "name": f"{module.table}_uk"}]
+    elif len(composite_unique_fields) == 1:
+        unique_indexes = [{"columns": composite_unique_fields, "name": f"{module.table}_{composite_unique_fields[0]}_uk"}]
+
     return {
         "model": module.model,
         "module": module.module,
         "table": module.table,
         "fields": rows,
-        "columns": build_column_mappings(module.fields),
+        "columns": columns,
         "store_rules": build_rules(module.fields, update=False),
         "update_rules": build_rules(module.fields, update=True),
         "route": module.route,
         "controller_namespace": f"App\\Http\\Controllers\\{module.module}",
+        "foreign_keys": foreign_keys,
+        "unique_indexes": unique_indexes,
     }
 
 
