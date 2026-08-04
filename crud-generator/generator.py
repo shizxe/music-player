@@ -164,11 +164,11 @@ def find_column_index(headers: list[str], name: str) -> int | None:
 def is_structured_definition(headers: list[str]) -> bool:
     normalized = [normalized_header_key(header) for header in headers]
     return (
-        "論理名" in headers or "logical_name" in normalized or "logicalname" in normalized
+        "logical_name" in normalized or "logicalname" in normalized
     ) and (
-        "物理名" in headers or "physical_name" in normalized or "physicalname" in normalized
+        "physical_name" in normalized or "physicalname" in normalized
     ) and (
-        "型" in headers or "type" in normalized or "datatype" in normalized
+        "type" in normalized or "datatype" in normalized
     )
 
 
@@ -289,15 +289,15 @@ def parse_definitions(path: Path) -> list[ModuleDefinition]:
 
         if is_structured_definition(headers):
             header_map = {
-                "logical_name": find_column_index(headers, "論理名") or find_column_index(headers, "logical_name") or find_column_index(headers, "logical name"),
-                "physical_name": find_column_index(headers, "物理名") or find_column_index(headers, "physical_name") or find_column_index(headers, "physical name"),
-                "type": find_column_index(headers, "型") or find_column_index(headers, "type") or find_column_index(headers, "datatype"),
-                "length": find_column_index(headers, "長さ") or find_column_index(headers, "length") or find_column_index(headers, "size"),
-                "precision": find_column_index(headers, "精度") or find_column_index(headers, "precision") or find_column_index(headers, "scale"),
-                "required": find_column_index(headers, "必須") or find_column_index(headers, "required") or find_column_index(headers, "nullable"),
-                "primary_key": find_column_index(headers, "主キー") or find_column_index(headers, "primary_key") or find_column_index(headers, "pk"),
-                "constraints": find_column_index(headers, "制約") or find_column_index(headers, "constraints") or find_column_index(headers, "constraint"),
-                "delete_constraints": find_column_index(headers, "削除制約") or find_column_index(headers, "delete_constraints") or find_column_index(headers, "delete constraint"),
+                "logical_name": find_column_index(headers, "logical_name") or find_column_index(headers, "logical name"),
+                "physical_name": find_column_index(headers, "physical_name") or find_column_index(headers, "physical name"),
+                "type": find_column_index(headers, "type") or find_column_index(headers, "datatype"),
+                "length": find_column_index(headers, "length") or find_column_index(headers, "size"),
+                "precision": find_column_index(headers, "precision") or find_column_index(headers, "scale"),
+                "required": find_column_index(headers, "required") or find_column_index(headers, "nullable"),
+                "primary_key": find_column_index(headers, "primary_key") or find_column_index(headers, "pk"),
+                "constraints": find_column_index(headers, "constraints") or find_column_index(headers, "constraint"),
+                "delete_constraints": find_column_index(headers, "delete_constraints") or find_column_index(headers, "delete constraint"),
             }
             table_name = normalize_table_name(source_name, source_name)
             model_name = normalize_model_name(source_name)
@@ -344,7 +344,7 @@ def write_file(path: Path, content: str, force: bool = False) -> bool:
     return True
 
 
-def build_column_mappings(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_column_mappings(fields: list[dict[str, Any]], composite_unique_fields: list[str] | None = None) -> list[dict[str, Any]]:
     columns = []
     for field in fields:
         raw_type = field["raw_type"].lower()
@@ -416,11 +416,15 @@ def build_column_mappings(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     declaration += f", {args[0]}"
             declaration += ")"
 
+        unique = "unique" in field.get("modifiers", [])
+        if composite_unique_fields and len(composite_unique_fields) > 1 and name in composite_unique_fields:
+            unique = False
+
         columns.append({
             "name": name,
             "declaration": declaration,
             "nullable": field.get("nullable", False),
-            "unique": "unique" in field.get("modifiers", []),
+            "unique": unique,
         })
     return columns
 
@@ -437,10 +441,10 @@ def build_rules(fields: list[dict[str, Any]], update: bool = False) -> list[dict
 
 def compute_stub_context(module: ModuleDefinition) -> dict[str, Any]:
     rows = [field["name"] for field in module.fields]
-    columns = build_column_mappings(module.fields)
+    composite_unique_fields = [field["name"] for field in module.fields if "unique" in field.get("modifiers", []) and field.get("name")]
+    columns = build_column_mappings(module.fields, composite_unique_fields)
     foreign_keys = []
     unique_indexes = []
-    composite_unique_fields = [field["name"] for field in module.fields if "unique" in field.get("modifiers", []) and field.get("name")]
     for field in module.fields:
         if field.get("reference_table"):
             foreign_keys.append({
