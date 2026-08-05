@@ -22,6 +22,11 @@ fi
 INPUT_FILE="$1"
 shift
 
+# Allow passing a relative input directory from the repository root.
+if [ ! -e "$INPUT_FILE" ]; then
+  INPUT_FILE="$SCRIPT_DIR/$INPUT_FILE"
+fi
+
 if [ ! -x "$VENV_DIR/bin/python" ]; then
   echo "Creating Python environment for the CRUD generator..."
   if ! "$PYTHON_BIN" -m venv "$VENV_DIR"; then
